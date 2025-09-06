@@ -14,6 +14,7 @@ use alloy::{
 };
 use anyhow::Result;
 use futures::future::try_join_all;
+use rayon::prelude::*;
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 
 use crate::{
@@ -162,7 +163,7 @@ impl PendleBalanceFetcher {
         exchange_rate: U256,
     ) -> UserRecord {
         sy_record
-            .iter()
+            .par_iter()
             .map(|(user, sy_balance)| {
                 let underlying_balance = *sy_balance * exchange_rate / U256::from(1e18);
                 (*user, underlying_balance)
@@ -484,11 +485,7 @@ impl PendleBalanceFetcher {
 
         // Convert string addresses to Address type
         let wlp_address = Address::from_str(&wlp_info.wlp)?;
-        let wlp_holder_addresses: Vec<Address> = wlp_info
-            .wlp_holders
-            .iter()
-            .map(|h| Address::from_str(h))
-            .collect::<Result<Vec<_>, _>>()?;
+        let wlp_holder_addresses: Vec<Address> = wlp_info.wlp_holders.iter().map(|h| *h).collect();
 
         // Get balances for all WLP holders
         let balances = self
@@ -515,14 +512,12 @@ impl PendleBalanceFetcher {
             let user_share = wlp_balance * sy_per_one_wlp / U256::from(1e18);
 
             // Check if this holder is a money market
-            let mm_type = self.get_mm_type(lp_info, holder);
+            let mm_type = self.get_mm_type(lp_info, *holder);
 
             if let Some(mm_type) = mm_type {
                 *total_mm_shares.entry(mm_type).or_insert(U256::ZERO) += user_share;
             } else {
-                // Regular holder
-                let holder_address = Address::from_str(holder)?;
-                self.increase_user_amount(result, holder_address, user_share);
+                self.increase_user_amount(result, *holder, user_share);
             }
         }
 
@@ -576,12 +571,12 @@ impl PendleBalanceFetcher {
         Ok(())
     }
 
-    fn get_mm_type(&self, lp_info: &FullMarketInfo, holder: &str) -> Option<MmType> {
+    fn get_mm_type(&self, lp_info: &FullMarketInfo, holder: Address) -> Option<MmType> {
         lp_info
             .wlp_info
             .as_ref()?
             .remap_mm_holder
-            .get(&holder.to_lowercase())
+            .get(&holder)
             .map(|mm_map| mm_map.mm_type.clone())
     }
 
@@ -619,13 +614,14 @@ impl PendleBalanceFetcher {
             .await?;
 
         // Calculate shares
-        let mut user_temp_shares = Vec::new();
-        for (i, balance) in balances.iter().enumerate() {
-            user_temp_shares.push(UserTempShare {
+        let user_temp_shares = balances
+            .par_iter()
+            .enumerate()
+            .map(|(i, &balance)| UserTempShare {
                 user: users[i],
                 share: balance * sy_per_one_wlp / U256::from(1e18),
-            });
-        }
+            })
+            .collect();
 
         Ok(user_temp_shares)
     }
@@ -657,21 +653,21 @@ impl PendleBalanceFetcher {
         }
 
         // Calculate shares for each user
-        let mut user_temp_shares = Vec::new();
-        for (j, user) in users.iter().enumerate() {
-            let receipt_balance = balances[j];
-
-            if receipt_balance == U256::ZERO {
-                continue;
-            }
-
-            let user_share = receipt_balance * boosted_sy_balance / total_receipt_balance;
-
-            user_temp_shares.push(UserTempShare {
-                user: *user,
-                share: user_share,
-            });
-        }
+        let user_temp_shares = balances
+            .par_iter()
+            .enumerate()
+            .filter_map(|(j, &receipt_balance)| {
+                if receipt_balance == U256::ZERO {
+                    None
+                } else {
+                    let user_share = receipt_balance * boosted_sy_balance / total_receipt_balance;
+                    Some(UserTempShare {
+                        user: users[j],
+                        share: user_share,
+                    })
+                }
+            })
+            .collect();
 
         Ok(user_temp_shares)
     }
@@ -699,15 +695,16 @@ impl PendleBalanceFetcher {
             .await?;
 
         // Calculate shares
-        let mut user_temp_shares = Vec::new();
-        for (i, balance) in balances.iter().enumerate() {
-            user_temp_shares.push(UserTempShare {
+        let user_temp_shares = balances
+            .par_iter()
+            .enumerate()
+            .map(|(i, &balance)| UserTempShare {
                 user: users[i],
                 share: balance * sy_per_one_wlp
                     / U256::from(1e18)
                     / U256::from(SILO_DECIMALS_OFFSET),
-            });
-        }
+            })
+            .collect();
 
         Ok(user_temp_shares)
     }
@@ -753,22 +750,25 @@ impl PendleBalanceFetcher {
             .await?;
 
         // Process results and calculate shares
-        let mut user_temp_shares = Vec::new();
-        for (i, data) in results.iter().enumerate() {
-            let collateral = if data.is_empty() {
-                U256::ZERO
-            } else {
-                // The position function returns multiple values, collateral is the first
-                // Decode as tuple (uint256 collateral, uint256 supplyShares, uint256 borrowShares)
-                // We only need collateral which is the first 32 bytes
-                U256::from_be_bytes::<32>(data[0..32].try_into().unwrap_or([0u8; 32]))
-            };
+        let user_temp_shares = results
+            .par_iter()
+            .enumerate()
+            .map(|(i, data)| {
+                let collateral = if data.is_empty() {
+                    U256::ZERO
+                } else {
+                    // The position function returns multiple values, collateral is the first
+                    // Decode as tuple (uint256 collateral, uint256 supplyShares, uint256 borrowShares)
+                    // We only need collateral which is the first 32 bytes
+                    U256::from_be_bytes::<32>(data[0..32].try_into().unwrap_or([0u8; 32]))
+                };
 
-            user_temp_shares.push(UserTempShare {
-                user: morpho_users[i].user,
-                share: collateral * sy_per_one_wlp / U256::from(1e18 as u64),
-            });
-        }
+                UserTempShare {
+                    user: morpho_users[i].user,
+                    share: collateral * sy_per_one_wlp / U256::from(1e18),
+                }
+            })
+            .collect();
 
         Ok(user_temp_shares)
     }
