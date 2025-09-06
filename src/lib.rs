@@ -33,7 +33,7 @@ use crate::{
         },
         provider::RpcProvider,
     },
-    utils::{from_u256_to_decimal, sy_balances_to_underlying},
+    utils::{from_u256_to_decimal, get_mm_type, sy_balances_to_underlying},
 };
 
 /// A client for fetching Pendle generic balances for a specific pool configuration.
@@ -494,7 +494,7 @@ impl PendleBalanceFetcher {
             let user_share = wlp_balance * sy_per_one_wlp / U256::from(1e18);
 
             // Check if this holder is a money market
-            let mm_type = self.get_mm_type(lp_info, *holder);
+            let mm_type = get_mm_type(lp_info, holder);
 
             if let Some(mm_type) = mm_type {
                 *total_mm_shares.entry(mm_type).or_insert(U256::ZERO) += user_share;
@@ -551,15 +551,6 @@ impl PendleBalanceFetcher {
         self.increase_user_amounts(result, &morpho_shares);
 
         Ok(())
-    }
-
-    fn get_mm_type(&self, lp_info: &FullMarketInfo, holder: Address) -> Option<MmType> {
-        lp_info
-            .wlp_info
-            .as_ref()?
-            .remap_mm_holder
-            .get(&holder)
-            .map(|mm_map| mm_map.mm_type.clone())
     }
 
     fn soft_check(&self, shares: &[UserTempShare], upperbound: U256) -> Result<()> {
@@ -983,5 +974,32 @@ mod tests {
             .unwrap();
 
         println!("result: {:?}", results);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_user_balance_snapshot_batch_for_user() {
+        let user = Address::from_str("0x831e4ecf60dd9727d30c3610fa15ad52fa1ff54f").unwrap();
+
+        let fetcher = setup();
+        let blocks = [13057329];
+
+        let results = fetcher
+            .fetch_user_balance_snapshot_batch(&blocks, PoolType::Shares)
+            .await
+            .unwrap();
+
+        for result in results {
+            let yt_user_record = result.yt_user_records_in_sy.get(&user);
+            println!("yt_user_record: {:?}", yt_user_record);
+
+            let lp_user_record = result.lp_user_records_in_sy.get(&user);
+            println!("lp_user_record: {:?}", lp_user_record);
+
+            let lp_user_record_underlying = result.lp_user_records_in_underlying.get(&user);
+            println!("lp_user_record_underlying: {:?}", lp_user_record_underlying);
+
+            let yt_user_record_underlying = result.yt_user_records_in_underlying.get(&user);
+            println!("yt_user_record_underlying: {:?}", yt_user_record_underlying);
+        }
     }
 }
