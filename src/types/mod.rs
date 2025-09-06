@@ -23,15 +23,15 @@ pub enum PoolType {
     LpValueInSy,
 }
 
-pub type UserRecord = IndexMap<Address, U256>;
+pub type UserBalance = IndexMap<Address, U256>;
 
 #[derive(Debug, Default, Clone)]
 pub struct SnapshotResult {
     pub block_number: BlockNumber,
-    pub yt_user_records_in_sy: UserRecord,
-    pub lp_user_records_in_sy: UserRecord,
-    pub yt_user_records_in_underlying: UserRecord,
-    pub lp_user_records_in_underlying: UserRecord,
+    pub yt_user_records_in_sy: UserBalance,
+    pub lp_user_records_in_sy: UserBalance,
+    pub yt_user_records_in_underlying: UserBalance,
+    pub lp_user_records_in_underlying: UserBalance,
 }
 
 #[derive(Debug, Clone)]
