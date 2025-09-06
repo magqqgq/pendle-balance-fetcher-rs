@@ -156,24 +156,6 @@ impl PendleBalanceFetcher {
         Ok(new_snapshots)
     }
 
-<<<<<<< Updated upstream
-    fn convert_sy_user_record_to_underlying(
-        &self,
-        sy_record: &UserRecord,
-        exchange_rate: U256,
-    ) -> UserRecord {
-        sy_record
-            .par_iter()
-            .map(|(user, sy_balance)| {
-                let underlying_balance = *sy_balance * exchange_rate / U256::from(1e18);
-                (*user, underlying_balance)
-            })
-            .filter(|(_, balance)| *balance > U256::ZERO)
-            .collect()
-    }
-
-=======
->>>>>>> Stashed changes
     async fn fetch_user_balance_snapshot(
         &self,
         all_yt_users: Vec<Address>,
