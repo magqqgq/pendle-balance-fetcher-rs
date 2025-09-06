@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub struct MmMapType {
-    pub holder: String,
+    pub holder: Address,
     #[serde(rename = "type")]
     pub mm_type: MmType,
 }
@@ -23,13 +23,13 @@ pub struct MmMapType {
 #[serde(rename_all = "camelCase")]
 pub struct WlpInfo {
     pub wlp: String,
-    pub wlp_holders: Vec<String>,
+    pub wlp_holders: Vec<Address>,
     pub euler: Vec<EulerUserInstance>,
     pub silo: Vec<SiloUserInstance>,
     pub morpho_address: Option<Address>,
     pub morpho: Vec<MorphoUserInstance>,
     #[serde(rename = "remapMMHolder")]
-    pub remap_mm_holder: HashMap<String, MmMapType>,
+    pub remap_mm_holder: HashMap<Address, MmMapType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,12 +132,22 @@ impl PendleClient {
         }
 
         // Build `remapMMHolder` map
-        let mut remap_mm_holder: HashMap<String, MmMapType> = HashMap::new();
+        let mut remap_mm_holder: HashMap<Address, MmMapType> = HashMap::new();
         for whm in res.wlp_holder_mappings {
+            let asset = match Address::from_str(&whm.asset) {
+                Ok(asset) => asset,
+                Err(_) => continue,
+            };
+
+            let holder = match Address::from_str(&whm.holder) {
+                Ok(holder) => holder,
+                Err(_) => continue,
+            };
+
             remap_mm_holder.insert(
-                whm.asset.to_lowercase(),
+                asset,
                 MmMapType {
-                    holder: whm.holder.to_lowercase(),
+                    holder,
                     mm_type: whm.money_market,
                 },
             );
@@ -155,7 +165,11 @@ impl PendleClient {
             liquid_locker_datas: res.liquid_locker_pools,
             wlp_info: Some(WlpInfo {
                 wlp: wlp_response.wlp_address,
-                wlp_holders: wlp_response.wlp_users,
+                wlp_holders: wlp_response
+                    .wlp_users
+                    .iter()
+                    .map(|user| Address::from_str(user).unwrap())
+                    .collect(),
                 morpho: wlp_response.morpho_users,
                 euler: wlp_response.euler_users,
                 morpho_address: morpho_address.map(|address| Address::from_str(&address).unwrap()),
