@@ -26,13 +26,13 @@ use crate::{
     },
     multicall::Multicall,
     types::{
-        PoolConfig, PoolType, SnapshotResult, UserRecord, UserTempShare,
+        PoolConfig, PoolType, SnapshotResult, UserBalance, UserTempShare,
         protocols::{
             EulerUserInstance, LiquidLockerData, MmType, MorphoUserInstance, SiloUserInstance,
         },
         provider::RpcProvider,
     },
-    utils::from_u256_to_decimal,
+    utils::{from_u256_to_decimal, sy_balances_to_underlying},
 };
 
 /// A client for fetching Pendle generic balances for a specific pool configuration.
@@ -134,22 +134,20 @@ impl PendleBalanceFetcher {
             .iter()
             .zip(exchange_rates.iter())
             .map(|(snapshot, &exchange_rate)| {
-                let underlying_yt = self.convert_sy_user_record_to_underlying(
-                    &snapshot.yt_user_records_in_sy,
-                    exchange_rate,
-                );
+                let yt_user_balances_in_sy = snapshot.yt_user_records_in_sy.clone();
+                let lp_user_balances_in_sy = snapshot.lp_user_records_in_sy.clone();
 
-                let underlying_lp = self.convert_sy_user_record_to_underlying(
-                    &snapshot.lp_user_records_in_sy,
-                    exchange_rate,
-                );
+                let yt_user_balances_in_underlying =
+                    sy_balances_to_underlying(&yt_user_balances_in_sy, exchange_rate);
+                let lp_user_balances_in_underlying =
+                    sy_balances_to_underlying(&lp_user_balances_in_sy, exchange_rate);
 
                 SnapshotResult {
                     block_number: snapshot.block_number,
-                    yt_user_records_in_sy: snapshot.yt_user_records_in_sy.clone(),
-                    lp_user_records_in_sy: snapshot.lp_user_records_in_sy.clone(),
-                    yt_user_records_in_underlying: underlying_yt,
-                    lp_user_records_in_underlying: underlying_lp,
+                    yt_user_records_in_sy: yt_user_balances_in_sy,
+                    lp_user_records_in_sy: lp_user_balances_in_sy,
+                    yt_user_records_in_underlying: yt_user_balances_in_underlying,
+                    lp_user_records_in_underlying: lp_user_balances_in_underlying,
                 }
             })
             .collect();
@@ -157,6 +155,7 @@ impl PendleBalanceFetcher {
         Ok(new_snapshots)
     }
 
+<<<<<<< Updated upstream
     fn convert_sy_user_record_to_underlying(
         &self,
         sy_record: &UserRecord,
@@ -172,14 +171,16 @@ impl PendleBalanceFetcher {
             .collect()
     }
 
+=======
+>>>>>>> Stashed changes
     async fn fetch_user_balance_snapshot(
         &self,
         all_yt_users: Vec<Address>,
         lp_infos: Vec<FullMarketInfo>,
         block_number: u64,
     ) -> Result<SnapshotResult> {
-        let mut yt_user_records = UserRecord::default();
-        let mut lp_user_records = UserRecord::default();
+        let mut yt_user_records = UserBalance::default();
+        let mut lp_user_records = UserBalance::default();
 
         // Apply YT holder shares
         self.apply_yt_holder_shares(&mut yt_user_records, &all_yt_users, block_number)
@@ -193,7 +194,7 @@ impl PendleBalanceFetcher {
             .map(|(lp_info, lp_market)| {
                 let fetcher = self.clone();
                 async move {
-                    let mut temp_result = UserRecord::default();
+                    let mut temp_result = UserBalance::default();
                     fetcher
                         .apply_lp_holder_shares(
                             &mut temp_result,
@@ -202,7 +203,7 @@ impl PendleBalanceFetcher {
                             block_number,
                         )
                         .await?;
-                    Ok::<UserRecord, anyhow::Error>(temp_result)
+                    Ok::<UserBalance, anyhow::Error>(temp_result)
                 }
             });
 
@@ -224,8 +225,8 @@ impl PendleBalanceFetcher {
             block_number,
             yt_user_records_in_sy: yt_user_records_vec.into_iter().collect(),
             lp_user_records_in_sy: lp_user_records_vec.into_iter().collect(),
-            yt_user_records_in_underlying: UserRecord::default(),
-            lp_user_records_in_underlying: UserRecord::default(),
+            yt_user_records_in_underlying: UserBalance::default(),
+            lp_user_records_in_underlying: UserBalance::default(),
         })
     }
 
@@ -234,7 +235,7 @@ impl PendleBalanceFetcher {
         lp_infos: Vec<FullMarketInfo>,
         block_number: u64,
     ) -> Result<SnapshotResult> {
-        let mut lp_user_records = UserRecord::default();
+        let mut lp_user_records = UserBalance::default();
 
         // Process each LP market
         for (i, lp_market) in self.pool_config.lps.iter().enumerate() {
@@ -263,16 +264,16 @@ impl PendleBalanceFetcher {
 
         Ok(SnapshotResult {
             block_number,
-            yt_user_records_in_sy: UserRecord::default(),
+            yt_user_records_in_sy: UserBalance::default(),
             lp_user_records_in_sy: lp_user_records_vec.into_iter().collect(),
-            yt_user_records_in_underlying: UserRecord::default(),
-            lp_user_records_in_underlying: UserRecord::default(),
+            yt_user_records_in_underlying: UserBalance::default(),
+            lp_user_records_in_underlying: UserBalance::default(),
         })
     }
 
     async fn apply_yt_holder_shares(
         &self,
-        yt_user_records: &mut UserRecord,
+        yt_user_records: &mut UserBalance,
         all_yt_users: &[Address],
         block_number: u64,
     ) -> Result<()> {
@@ -401,7 +402,7 @@ impl PendleBalanceFetcher {
 
     async fn apply_lp_holder_shares(
         &self,
-        result: &mut UserRecord,
+        result: &mut UserBalance,
         lp_token_address: Address,
         lp_info: &FullMarketInfo,
         block_number: u64,
@@ -471,7 +472,7 @@ impl PendleBalanceFetcher {
     // Add these placeholder methods that need implementation:
     async fn apply_wlp_holder_shares(
         &self,
-        result: &mut UserRecord,
+        result: &mut UserBalance,
         lp_info: &FullMarketInfo,
         block_number: u64,
         boosted_sy_balance: U256,
@@ -780,8 +781,8 @@ impl PendleBalanceFetcher {
         lp_holders: &[Address],
         liquid_locker_datas: &[LiquidLockerData],
         block_number: u64,
-    ) -> Result<UserRecord> {
-        let mut result = UserRecord::new();
+    ) -> Result<UserBalance> {
+        let mut result = UserBalance::new();
 
         // Get balances for all LP holders
         let balances = self
@@ -942,12 +943,12 @@ impl PendleBalanceFetcher {
     }
 
     /// Increase a user's amount in the result map.
-    fn increase_user_amount(&self, result: &mut UserRecord, user: Address, amount: U256) {
+    fn increase_user_amount(&self, result: &mut UserBalance, user: Address, amount: U256) {
         *result.entry(user).or_insert(U256::ZERO) += amount;
     }
 
     /// Increase multiple users' amounts using UserTempShare data
-    fn increase_user_amounts(&self, result: &mut UserRecord, datas: &[UserTempShare]) {
+    fn increase_user_amounts(&self, result: &mut UserBalance, datas: &[UserTempShare]) {
         for data in datas {
             self.increase_user_amount(result, data.user, data.share);
         }
