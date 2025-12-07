@@ -11,6 +11,7 @@ pub use builder::PendleBalanceFetcherBuilder;
 use std::{collections::HashMap, str::FromStr};
 
 use alloy::{
+    eips::BlockId,
     primitives::{Address, BlockNumber, FixedBytes, U256},
     providers::{Provider, ProviderBuilder},
     transports::http::reqwest::Url,
@@ -152,6 +153,7 @@ impl PendleBalanceFetcher {
                     sy_balances_to_underlying(&lp_user_balances_in_sy, exchange_rate);
 
                 SnapshotResult {
+                    block_timestamp: snapshot.block_timestamp,
                     block_number: snapshot.block_number,
                     yt_user_records_in_sy: yt_user_balances_in_sy,
                     lp_user_records_in_sy: lp_user_balances_in_sy,
@@ -212,7 +214,15 @@ impl PendleBalanceFetcher {
         let mut lp_user_records_vec: Vec<_> = lp_user_records.into_iter().collect();
         lp_user_records_vec.sort_by(|a, b| b.1.cmp(&a.1));
 
+        let block = self
+            .rpc_provider
+            .get_block(BlockId::from(block_number))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Block not found"))?;
+        let block_timestamp = block.header.timestamp;
+
         Ok(SnapshotResult {
+            block_timestamp,
             block_number,
             yt_user_records_in_sy: yt_user_records_vec.into_iter().collect(),
             lp_user_records_in_sy: lp_user_records_vec.into_iter().collect(),
@@ -226,6 +236,14 @@ impl PendleBalanceFetcher {
         lp_infos: Vec<FullMarketInfo>,
         block_number: u64,
     ) -> Result<SnapshotResult> {
+        let block = self
+            .rpc_provider
+            .get_block(BlockId::from(block_number))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("Block not found"))?;
+
+        let block_timestamp = block.header.timestamp;
+
         let mut lp_user_records = UserBalance::default();
 
         // Process each LP market
@@ -239,6 +257,7 @@ impl PendleBalanceFetcher {
                             &lp_info.lp_holders,
                             &lp_info.liquid_locker_datas,
                             block_number,
+                            block_timestamp,
                         )
                         .await?;
 
@@ -254,6 +273,7 @@ impl PendleBalanceFetcher {
         lp_user_records_vec.sort_by(|a, b| b.1.cmp(&a.1));
 
         Ok(SnapshotResult {
+            block_timestamp,
             block_number,
             yt_user_records_in_sy: UserBalance::default(),
             lp_user_records_in_sy: lp_user_records_vec.into_iter().collect(),
@@ -762,6 +782,7 @@ impl PendleBalanceFetcher {
         lp_holders: &[Address],
         liquid_locker_datas: &[LiquidLockerData],
         block_number: u64,
+        block_timestamp: u64,
     ) -> Result<UserBalance> {
         let mut result = UserBalance::new();
 
@@ -772,7 +793,9 @@ impl PendleBalanceFetcher {
             .await?;
 
         // Get LP to SY exchange rate
-        let price = self.get_lp_to_sy_rate(lp_market, yt, block_number).await?;
+        let price = self
+            .get_lp_to_sy_rate(lp_market, yt, block_number, block_timestamp)
+            .await?;
 
         // Process each LP holder
         for (i, holder) in lp_holders.iter().enumerate() {
@@ -851,6 +874,7 @@ impl PendleBalanceFetcher {
         lp_market: Address,
         yt: Address,
         block_number: u64,
+        block_timestamp: u64,
     ) -> Result<U256> {
         let market = PendleMarketInstance::new(lp_market, self.rpc_provider.clone());
         let yt_contract = PendleYieldTokenInstance::new(yt, self.rpc_provider.clone());
@@ -861,13 +885,6 @@ impl PendleBalanceFetcher {
             .call()
             .block(block_number.into())
             .await?;
-
-        // Get block timestamp
-        let block = self
-            .rpc_provider
-            .get_block_by_number(block_number.into())
-            .await?;
-        let block_timestamp = block.unwrap().header.timestamp;
 
         // Calculate time to expiry (in seconds)
         let time_to_expiry = state.expiry.saturating_sub(U256::from(block_timestamp));

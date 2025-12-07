@@ -27,6 +27,7 @@ pub type UserBalance = IndexMap<Address, U256>;
 
 #[derive(Debug, Default, Clone)]
 pub struct SnapshotResult {
+    pub block_timestamp: u64,
     pub block_number: BlockNumber,
     pub yt_user_records_in_sy: UserBalance,
     pub lp_user_records_in_sy: UserBalance,
