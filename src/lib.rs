@@ -1,9 +1,12 @@
+pub mod builder;
 pub mod client;
 pub mod constants;
 pub mod contracts;
 pub mod multicall;
 pub mod types;
 pub mod utils;
+
+pub use builder::PendleBalanceFetcherBuilder;
 
 use std::{collections::HashMap, str::FromStr};
 
@@ -18,6 +21,7 @@ use rayon::prelude::*;
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 
 use crate::{
+    builder::MissingProvider,
     client::{FullMarketInfo, PendleClient},
     constants::PENDLE_TREASURY,
     contracts::{
@@ -46,6 +50,10 @@ pub struct PendleBalanceFetcher {
 }
 
 impl PendleBalanceFetcher {
+    pub fn builder(pool_config: PoolConfig) -> PendleBalanceFetcherBuilder<MissingProvider> {
+        PendleBalanceFetcherBuilder::new(pool_config)
+    }
+
     /// Creates a new `PendleBalanceFetcher` client.
     ///
     /// # Arguments
@@ -930,17 +938,15 @@ impl PendleBalanceFetcher {
 
 #[cfg(test)]
 mod tests {
-
     use std::str::FromStr;
 
     use alloy::primitives::Address;
+    use dotenv::dotenv;
     use lazy_static::lazy_static;
 
     use crate::types::Market;
 
     use super::*;
-
-    const RPC_URL: &str = "https://rpc.hyperliquid.xyz/evm";
 
     lazy_static! {
         static ref KHYPE_SY: Address =
@@ -954,13 +960,17 @@ mod tests {
     }
 
     fn setup() -> PendleBalanceFetcher {
+        dotenv().ok();
+
+        let rpc_url = std::env::var("RPC_URL").unwrap();
+
         let pool_config = PoolConfig {
             sy: KHYPE_SY.clone(),
             yt: KHYPE_YT.clone(),
             lps: KHYPE_LPS.clone(),
         };
 
-        PendleBalanceFetcher::try_new(&Url::from_str(RPC_URL).unwrap(), pool_config).unwrap()
+        PendleBalanceFetcher::try_new(&Url::from_str(&rpc_url).unwrap(), pool_config).unwrap()
     }
 
     #[tokio::test]

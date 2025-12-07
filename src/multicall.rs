@@ -68,7 +68,7 @@ impl Multicall {
             .block(block_number.into())
             .await?;
 
-        // Decode the return data
+        // Decode return data
         let balances: Vec<U256> = result
             .returnData
             .into_iter()
@@ -268,11 +268,10 @@ mod tests {
     use std::str::FromStr;
 
     use alloy::providers::ProviderBuilder;
+    use dotenv::dotenv;
     use reqwest::Url;
 
     use super::*;
-
-    const RPC_URL: &str = "https://rpc.hyperliquid.xyz/evm";
 
     lazy_static::lazy_static! {
         static ref YT_TOKEN_ADDRESS: Address =
@@ -283,12 +282,20 @@ mod tests {
             Address::from_str("0x1fccc097db89a86bfc474a1028f93958295b1fb7").unwrap();
     }
 
+    fn setup() -> Multicall {
+        dotenv().ok();
+
+        let rpc_url = std::env::var("RPC_URL").unwrap();
+
+        let rpc_provider = ProviderBuilder::new().connect_http(Url::from_str(&rpc_url).unwrap());
+        Multicall::new(rpc_provider.clone())
+    }
+
     #[tokio::test]
     async fn test_get_all_erc20_balances() {
-        let rpc_provider = ProviderBuilder::new().connect_http(Url::from_str(RPC_URL).unwrap());
-        let multicall = Multicall::new(rpc_provider.clone());
+        let multicall = setup();
 
-        let block_number = rpc_provider.get_block_number().await.unwrap();
+        let block_number = multicall.provider.get_block_number().await.unwrap();
 
         let balances = multicall
             .get_all_erc20_balances(*YT_TOKEN_ADDRESS, &[*USER_1, *USER_2], block_number)
@@ -300,10 +307,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_yt_general_data() {
-        let rpc_provider = ProviderBuilder::new().connect_http(Url::from_str(RPC_URL).unwrap());
-        let multicall = Multicall::new(rpc_provider.clone());
+        let multicall = setup();
 
-        let block_number = rpc_provider.get_block_number().await.unwrap();
+        let block_number = multicall.provider.get_block_number().await.unwrap();
 
         let yt_general_data = multicall
             .get_yt_general_data(*YT_TOKEN_ADDRESS, block_number)
@@ -315,10 +321,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_all_erc20_balances_multi_tokens() {
-        let rpc_provider = ProviderBuilder::new().connect_http(Url::from_str(RPC_URL).unwrap());
-        let multicall = Multicall::new(rpc_provider.clone());
+        let multicall = setup();
 
-        let block_number = rpc_provider.get_block_number().await.unwrap();
+        let block_number = multicall.provider.get_block_number().await.unwrap();
 
         // Example: Get balances for different token-address pairs
         let tokens = vec![
@@ -348,10 +353,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_all_market_active_balances() {
-        let rpc_provider = ProviderBuilder::new().connect_http(Url::from_str(RPC_URL).unwrap());
-        let multicall = Multicall::new(rpc_provider.clone());
+        let multicall = setup();
 
-        let block_number = rpc_provider.get_block_number().await.unwrap();
+        let block_number = multicall.provider.get_block_number().await.unwrap();
 
         let addresses = vec![
             Address::from_str("0xc328dfcd2c8450e2487a91daa9b75629075b7a43").unwrap(),
@@ -369,10 +373,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_all_yt_interest_data() {
-        let rpc_provider = ProviderBuilder::new().connect_http(Url::from_str(RPC_URL).unwrap());
-        let multicall = Multicall::new(rpc_provider.clone());
+        let multicall = setup();
 
-        let block_number = rpc_provider.get_block_number().await.unwrap();
+        let block_number = multicall.provider.get_block_number().await.unwrap();
 
         let addresses = vec![
             Address::from_str("0xc328dfcd2c8450e2487a91daa9b75629075b7a43").unwrap(),
