@@ -13,8 +13,7 @@ use std::{collections::HashMap, str::FromStr};
 use alloy::{
     eips::BlockId,
     primitives::{Address, BlockNumber, FixedBytes, U256},
-    providers::{Provider, ProviderBuilder},
-    transports::http::reqwest::Url,
+    providers::Provider,
 };
 use anyhow::Result;
 use futures::future::try_join_all;
@@ -47,47 +46,23 @@ pub struct PendleBalanceFetcher {
     rpc_provider: RpcProvider,
     multicall: Multicall,
     client: PendleClient,
-    pool_config: PoolConfig,
 }
 
 impl PendleBalanceFetcher {
-    pub fn builder(pool_config: PoolConfig) -> PendleBalanceFetcherBuilder<MissingProvider> {
-        PendleBalanceFetcherBuilder::new(pool_config)
-    }
-
-    /// Creates a new `PendleBalanceFetcher` client.
-    ///
-    /// # Arguments
-    ///
-    /// * `rpc_url` - The URL of the Ethereum JSON-RPC endpoint.
-    /// * `config` - The pool configuration for this client instance.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a new `PendleBalanceFetcher` instance or a `FetcherError`.
-    /// Creates a new `PendleBalanceFetcher` client.
-    pub fn try_new(rpc_url: &Url, pool_config: PoolConfig) -> Result<Self> {
-        let rpc_provider = ProviderBuilder::new().connect_http(rpc_url.clone());
-        let multicall = Multicall::new(rpc_provider.clone());
-        let client = PendleClient::new();
-
-        Ok(Self {
-            rpc_provider,
-            client,
-            multicall,
-            pool_config,
-        })
+    pub fn builder() -> PendleBalanceFetcherBuilder<MissingProvider> {
+        PendleBalanceFetcherBuilder::new()
     }
 
     pub async fn fetch_user_balance_snapshot_batch(
         &self,
+        pool_config: &PoolConfig,
         block_numbers: &[BlockNumber],
         pool_type: PoolType,
     ) -> Result<Vec<SnapshotResult>> {
-        let all_yt_users = self.client.query_token(&self.pool_config.yt).await?;
+        let all_yt_users = self.client.query_token(&pool_config.yt).await?;
 
         let lp_infos = try_join_all(
-            self.pool_config
+            pool_config
                 .lps
                 .iter()
                 .map(|lp| self.client.query_market_info(&lp.address)),
@@ -103,12 +78,17 @@ impl PendleBalanceFetcher {
                 match pool_type {
                     PoolType::Shares => {
                         fetcher
-                            .fetch_user_balance_snapshot(yt_users, lp_infos, block_number)
+                            .fetch_user_balance_snapshot(
+                                pool_config,
+                                yt_users,
+                                lp_infos,
+                                block_number,
+                            )
                             .await
                     }
                     PoolType::LpValueInSy => {
                         fetcher
-                            .fetch_user_lp_value_in_sy_snapshot(lp_infos, block_number)
+                            .fetch_user_lp_value_in_sy_snapshot(pool_config, lp_infos, block_number)
                             .await
                     }
                 }
@@ -117,14 +97,16 @@ impl PendleBalanceFetcher {
 
         let sy_snapshots = try_join_all(tasks).await?;
 
-        self.fetch_and_add_underlying_balances(&sy_snapshots).await
+        self.fetch_and_add_underlying_balances(pool_config, &sy_snapshots)
+            .await
     }
 
     async fn fetch_and_add_underlying_balances(
         &self,
+        pool_config: &PoolConfig,
         snapshots: &[SnapshotResult],
     ) -> Result<Vec<SnapshotResult>> {
-        let sy_contract = SyTokenInstance::new(self.pool_config.sy, self.rpc_provider.clone());
+        let sy_contract = SyTokenInstance::new(pool_config.sy, self.rpc_provider.clone());
 
         let exchange_rate_futures = snapshots.iter().map(|snapshot| {
             let sy_contract = sy_contract.clone();
@@ -168,6 +150,7 @@ impl PendleBalanceFetcher {
 
     async fn fetch_user_balance_snapshot(
         &self,
+        pool_config: &PoolConfig,
         all_yt_users: Vec<Address>,
         lp_infos: Vec<FullMarketInfo>,
         block_number: u64,
@@ -176,13 +159,18 @@ impl PendleBalanceFetcher {
         let mut lp_user_records = UserBalance::default();
 
         // Apply YT holder shares
-        self.apply_yt_holder_shares(&mut yt_user_records, &all_yt_users, block_number)
-            .await?;
+        self.apply_yt_holder_shares(
+            pool_config.yt,
+            &mut yt_user_records,
+            &all_yt_users,
+            block_number,
+        )
+        .await?;
 
         // Apply LP holder shares
         let lp_futures = lp_infos
             .into_iter()
-            .zip(self.pool_config.lps.iter())
+            .zip(pool_config.lps.iter())
             .filter(|(_, lp_market)| lp_market.deployed_block <= block_number)
             .map(|(lp_info, lp_market)| {
                 let fetcher = self.clone();
@@ -191,6 +179,7 @@ impl PendleBalanceFetcher {
                     fetcher
                         .apply_lp_holder_shares(
                             &mut temp_result,
+                            pool_config.sy,
                             lp_market.address,
                             &lp_info,
                             block_number,
@@ -233,6 +222,7 @@ impl PendleBalanceFetcher {
 
     async fn fetch_user_lp_value_in_sy_snapshot(
         &self,
+        pool_config: &PoolConfig,
         lp_infos: Vec<FullMarketInfo>,
         block_number: u64,
     ) -> Result<SnapshotResult> {
@@ -247,13 +237,13 @@ impl PendleBalanceFetcher {
         let mut lp_user_records = UserBalance::default();
 
         // Process each LP market
-        for (i, lp_market) in self.pool_config.lps.iter().enumerate() {
+        for (i, lp_market) in pool_config.lps.iter().enumerate() {
             if lp_market.deployed_block <= block_number {
                 if let Some(lp_info) = lp_infos.get(i) {
                     let lp_value_record = self
                         .apply_lp_holder_values_in_sy(
                             lp_market.address,
-                            self.pool_config.yt,
+                            pool_config.yt,
                             &lp_info.lp_holders,
                             &lp_info.liquid_locker_datas,
                             block_number,
@@ -284,6 +274,7 @@ impl PendleBalanceFetcher {
 
     async fn apply_yt_holder_shares(
         &self,
+        yt_token_address: Address,
         yt_user_records: &mut UserBalance,
         all_yt_users: &[Address],
         block_number: u64,
@@ -294,7 +285,7 @@ impl PendleBalanceFetcher {
         // Get YT token general data
         let general_data = self
             .multicall
-            .get_yt_general_data(self.pool_config.yt, block_number)
+            .get_yt_general_data(yt_token_address, block_number)
             .await?;
 
         let is_expired = general_data.is_expired;
@@ -314,12 +305,9 @@ impl PendleBalanceFetcher {
         // Get balances and interest data for all users
         let (balances_raw, yt_interests_raw) = tokio::try_join!(
             self.multicall
-                .get_all_erc20_balances(self.pool_config.yt, all_yt_users, block_number),
-            self.multicall.get_all_yt_interest_data(
-                self.pool_config.yt,
-                all_yt_users,
-                block_number
-            )
+                .get_all_erc20_balances(yt_token_address, all_yt_users, block_number),
+            self.multicall
+                .get_all_yt_interest_data(yt_token_address, all_yt_users, block_number)
         )?;
 
         println!("Balances fetched: {}", balances_raw.len()); // Debug
@@ -389,7 +377,7 @@ impl PendleBalanceFetcher {
 
         // Process interests
         for (user, user_index, amount) in users_interests {
-            if user == self.pool_config.yt {
+            if user == yt_token_address {
                 continue;
             }
             if user_index == U256::ZERO {
@@ -414,6 +402,7 @@ impl PendleBalanceFetcher {
     async fn apply_lp_holder_shares(
         &self,
         result: &mut UserBalance,
+        sy_token_address: Address,
         lp_token_address: Address,
         lp_info: &FullMarketInfo,
         block_number: u64,
@@ -421,7 +410,7 @@ impl PendleBalanceFetcher {
         // Get total SY balance held by the LP token
         let total_sy = self
             .multicall
-            .get_all_erc20_balances(self.pool_config.sy, &[lp_token_address], block_number)
+            .get_all_erc20_balances(sy_token_address, &[lp_token_address], block_number)
             .await?[0];
 
         // Get all active balances for LP holders
@@ -976,7 +965,12 @@ mod tests {
         },];
     }
 
-    fn setup() -> PendleBalanceFetcher {
+    struct TestFixture {
+        pool_config: PoolConfig,
+        fetcher: PendleBalanceFetcher,
+    }
+
+    fn setup() -> TestFixture {
         dotenv().ok();
 
         let rpc_url = std::env::var("RPC_URL").unwrap();
@@ -987,16 +981,26 @@ mod tests {
             lps: KHYPE_LPS.clone(),
         };
 
-        PendleBalanceFetcher::try_new(&Url::from_str(&rpc_url).unwrap(), pool_config).unwrap()
+        let fetcher = PendleBalanceFetcher::builder()
+            .rpc_url(rpc_url)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        TestFixture {
+            pool_config,
+            fetcher,
+        }
     }
 
     #[tokio::test]
     async fn test_fetch_user_balance_snapshot_batch() {
-        let fetcher = setup();
+        let fixture = setup();
         let blocks = [11474000, 11474100];
 
-        let results = fetcher
-            .fetch_user_balance_snapshot_batch(&blocks, PoolType::Shares)
+        let results = fixture
+            .fetcher
+            .fetch_user_balance_snapshot_batch(&fixture.pool_config, &blocks, PoolType::Shares)
             .await
             .unwrap();
 
@@ -1005,13 +1009,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_user_balance_snapshot_batch_for_user() {
+        let fixture = setup();
         let user = Address::from_str("0x831e4ecf60dd9727d30c3610fa15ad52fa1ff54f").unwrap();
-
-        let fetcher = setup();
         let blocks = [13057329];
 
-        let results = fetcher
-            .fetch_user_balance_snapshot_batch(&blocks, PoolType::Shares)
+        let results = fixture
+            .fetcher
+            .fetch_user_balance_snapshot_batch(&fixture.pool_config, &blocks, PoolType::Shares)
             .await
             .unwrap();
 

@@ -3,10 +3,7 @@ use anyhow::{Context, Error};
 use url::Url;
 
 use crate::{
-    PendleBalanceFetcher,
-    client::PendleClient,
-    multicall::Multicall,
-    types::{PoolConfig, provider::RpcProvider},
+    PendleBalanceFetcher, client::PendleClient, multicall::Multicall, types::provider::RpcProvider,
 };
 
 pub struct MissingProvider;
@@ -17,14 +14,12 @@ pub struct ProviderSet {
 
 pub struct PendleBalanceFetcherBuilder<State> {
     state: State,
-    pool_config: PoolConfig,
 }
 
 impl PendleBalanceFetcherBuilder<MissingProvider> {
-    pub fn new(pool_config: PoolConfig) -> Self {
+    pub fn new() -> Self {
         Self {
             state: MissingProvider,
-            pool_config,
         }
     }
 
@@ -37,7 +32,6 @@ impl PendleBalanceFetcherBuilder<MissingProvider> {
 
         Ok(PendleBalanceFetcherBuilder {
             state: ProviderSet { provider },
-            pool_config: self.pool_config,
         })
     }
 
@@ -49,15 +43,7 @@ impl PendleBalanceFetcherBuilder<MissingProvider> {
             state: ProviderSet {
                 provider: rpc_provider,
             },
-            pool_config: self.pool_config,
         }
-    }
-}
-
-impl<S> PendleBalanceFetcherBuilder<S> {
-    pub fn pool_config(mut self, pool_config: PoolConfig) -> Self {
-        self.pool_config = pool_config;
-        self
     }
 }
 
@@ -70,7 +56,6 @@ impl PendleBalanceFetcherBuilder<ProviderSet> {
             rpc_provider: self.state.provider,
             multicall,
             client,
-            pool_config: self.pool_config,
         })
     }
 }
