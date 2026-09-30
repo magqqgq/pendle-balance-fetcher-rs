@@ -28,6 +28,11 @@ impl PendleBalanceFetcherBuilder<MissingProvider> {
         rpc_url: impl Into<String>,
     ) -> Result<PendleBalanceFetcherBuilder<ProviderSet>, Error> {
         let url = rpc_url.into().parse::<Url>().context("Invalid RPC URL")?;
+        // Reject non-HTTP(S) schemes (for example file or ftp URLs) so a
+        // misconfigured endpoint cannot trigger SSRF-like local file access.
+        if url.scheme() != "http" && url.scheme() != "https" {
+            return Err(anyhow::anyhow!("RPC URL must use http or https").into());
+        }
         let provider = ProviderBuilder::new().connect_http(url);
 
         Ok(PendleBalanceFetcherBuilder {

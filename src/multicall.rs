@@ -35,8 +35,10 @@ impl Multicall {
         }
     }
 
-    /// Fetches ERC20 balances for multiple token-address pairs using Multicall
-    /// Each token[i] is paired with address[i]
+    /// Fetches ERC20 balances for multiple token-address pairs using Multicall.
+    /// Each token[i] is paired with address[i]. Calls are chunked through
+    /// `tryAggregate` so one failing pair or a large batch cannot revert or
+    /// exceed RPC limits for the whole fetch.
     pub async fn get_all_erc20_balances_multi_tokens(
         &self,
         tokens: &[Address],
@@ -61,22 +63,17 @@ impl Multicall {
             })
             .collect();
 
-        let result = self
-            .instance
-            .aggregate(calls)
-            .call()
-            .block(block_number.into())
-            .await?;
+        // Use batched tryAggregate: failed subcalls decode as zero below.
+        let results = self.try_aggregate_multicall(calls, block_number).await?;
 
-        // Decode return data
-        let balances: Vec<U256> = result
-            .returnData
+        // Decode return data, defaulting to zero for failed/short responses.
+        let balances: Vec<U256> = results
             .into_iter()
             .map(|data| {
-                if data.is_empty() {
+                if data.len() < 32 {
                     U256::ZERO
                 } else {
-                    U256::from_be_bytes::<32>(data.as_ref().try_into().unwrap_or([0u8; 32]))
+                    U256::from_be_bytes::<32>(data.try_into().unwrap_or([0u8; 32]))
                 }
             })
             .collect();
@@ -177,7 +174,9 @@ impl Multicall {
         })
     }
 
-    /// Fetches active balances for multiple addresses from a Pendle market
+    /// Fetches active balances for multiple addresses from a Pendle market.
+    /// Uses batched `tryAggregate` so large holder sets are chunked and a
+    /// single failing subcall decodes as zero instead of reverting everything.
     pub async fn get_all_market_active_balances(
         &self,
         market: Address,
@@ -198,18 +197,18 @@ impl Multicall {
             })
             .collect();
 
-        let result = self
-            .instance
-            .aggregate(calls)
-            .call()
-            .block(block_number.into())
-            .await?;
+        let results = self.try_aggregate_multicall(calls, block_number).await?;
 
-        // Decode the return data
-        let balances: Vec<U256> = result
-            .returnData
+        // Decode the return data, defaulting to zero for failed/short responses.
+        let balances: Vec<U256> = results
             .into_iter()
-            .map(|data| U256::from_be_bytes::<32>(data.as_ref().try_into().unwrap()))
+            .map(|data| {
+                if data.len() < 32 {
+                    U256::ZERO
+                } else {
+                    U256::from_be_bytes::<32>(data.try_into().unwrap_or([0u8; 32]))
+                }
+            })
             .collect();
 
         Ok(balances)
@@ -283,15 +282,23 @@ mod tests {
     }
 
     fn setup() -> Multicall {
-        dotenv().ok();
+        // Report dotenv parse issues instead of silently ignoring them.
+        if let Err(e) = dotenv() {
+            eprintln!("dotenv load notice: {e:?}");
+        }
 
-        let rpc_url = std::env::var("RPC_URL").unwrap();
+        // Live-network tests require an explicit RPC endpoint.
+        let rpc_url = std::env::var("RPC_URL").expect("RPC_URL must be set for live tests");
 
-        let rpc_provider = ProviderBuilder::new().connect_http(Url::from_str(&rpc_url).unwrap());
+        let rpc_provider = ProviderBuilder::new().connect_http(
+            Url::from_str(&rpc_url).expect("RPC_URL must be a valid URL"),
+        );
         Multicall::new(rpc_provider.clone())
     }
 
+    // Live-network integration tests below require RPC_URL and are ignored by default.
     #[tokio::test]
+    #[ignore]
     async fn test_get_all_erc20_balances() {
         let multicall = setup();
 
@@ -306,6 +313,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_get_yt_general_data() {
         let multicall = setup();
 
@@ -320,6 +328,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_get_all_erc20_balances_multi_tokens() {
         let multicall = setup();
 
@@ -352,6 +361,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_get_all_market_active_balances() {
         let multicall = setup();
 
@@ -372,6 +382,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_get_all_yt_interest_data() {
         let multicall = setup();
 
